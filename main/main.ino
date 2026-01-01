@@ -27,13 +27,18 @@
 
 #define LED_PIN LED_BUILTIN
 
+#define OUT_1 4
+#define OUT_2 5
+#define OUT_3 6
+#define OUT_4 7
+
 // some buffer for string formating in sprintf
 char Buffer[64];
 uint16_t i = 0;
 
 // KEY for keeloq algoritm
 // must be same as transmiter key, 64bit LSB-first
-uint8_t key[] = { 0x56, 0x4a, 0xbc, 0x07, 0x57, 0x1e, 0x62, 0x94 };
+uint8_t key[] = {0x23,0x63,0x6c,0x21,0xbe,0x44,0xa7,0xbd};
 
 // some useful structher for bitfildes
 struct hcsFixed hcs_fix;
@@ -42,17 +47,32 @@ struct hcsEncrypted hcs_enc;
 // buffers for keeloq
 uint32_t temp;
 
+// Setup - run once!
+void setup() {
+  Serial.begin(9600);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(OUT_1, OUTPUT);
+  pinMode(OUT_2, OUTPUT);
+  pinMode(OUT_3, OUTPUT);
+  pinMode(OUT_4, OUTPUT);
+  radio_init(&radio);
+  Serial.println("Ready");
+}
+
 // jast toggel led
-void blink() {
+void led_toggle() {
   digitalWrite(LED_PIN, !digitalRead(LED_PIN));
 }
 
-// Setup - run once!
-void setup() {
-  Serial.begin(115200);
-  pinMode(LED_PIN, OUTPUT);
-  radio_init(&radio);
-  Serial.println("Ready");
+// make output for control relay
+void gen_output(uint8_t btn)
+{
+  switch (btn) {
+    case 0x1 :digitalWrite(OUT_1,HIGH);delay(1000);digitalWrite(OUT_1,LOW);break;
+    case 0x2 :digitalWrite(OUT_2,HIGH);delay(1000);digitalWrite(OUT_2,LOW);break;
+    case 0x4 :digitalWrite(OUT_3, !digitalRead(OUT_3));break;
+    case 0x8 :digitalWrite(OUT_4, !digitalRead(OUT_4));break;
+  }
 }
 
 // main app
@@ -60,7 +80,7 @@ void loop() {
   // check if we have new received packet
   if (radio_rx_data_is_ready(&radio)) {
     // LED indikator
-    blink();
+    led_toggle();
 
     // the received data (fix,encripted,vr) stored in [radio.dataF,radio.dataE,radio.dataVR] and ready for reading by the software.
     // using hcs301.h we can format and read bit by bitfilds [hcs_fix,hcs_enc].
@@ -92,6 +112,18 @@ void loop() {
         // everything is OK
         sprintf(Buffer, "dec=%08lX : btn=%lX ovr=%lX disc=%lX C=%lX \r\n", temp, hcs_enc.btn, hcs_enc.ovr, hcs_enc.disc, hcs_enc.counter);
         Serial.print(Buffer);
+
+        // make output signal
+        if(hcs_enc.btn==hcs_fix.btn)
+        {
+          // WARNING!
+          // Future section: compare received counter with previous value in EEPROM
+          // and act if the counter is greater.
+
+          // write on Pin
+          gen_output(hcs_enc.btn);
+        }
+        
       } else {
         // disc not match by 10bit of serial lsb
         Serial.print("WRONG KEY!\r\n");
