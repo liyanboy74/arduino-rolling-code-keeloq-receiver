@@ -20,7 +20,7 @@ for correct encoding the encrypted part of received packet we must know the key 
 
 **Pinout**
 
-![pin out](https://github.com/liyanboy74/arduino-rf-rolling-code-keeloq-receiver/assets/64005694/a802b74a-0f1d-48e5-ae89-53ffae9bc903)
+![29bc904](https://github.com/user-attachments/assets/fde89477-856f-4c6a-9ee2-9cd22f339358)
 
 ![signal](https://github.com/liyanboy74/arduino-rf-rolling-code-keeloq-receiver/assets/64005694/27df9ec2-debb-41bd-91a8-7b6e024ba1a5)
 
