@@ -119,6 +119,7 @@ void loop() {
           // WARNING!
           // Future section: compare received counter with previous value in EEPROM
           // and act if the counter is greater.
+          // For any valid Serial
 
           // write on Pin
           gen_output(hcs_enc.btn);
