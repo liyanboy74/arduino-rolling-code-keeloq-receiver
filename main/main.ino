@@ -15,22 +15,56 @@
  *
  *  just Connect RF 433 or 315 Mhz resiver to pin 2 (INT0) arduino UNO v3.
  *  for correct encoding the encrypted part of received packet we must know the key of keeloq algorithm.
+ *
+ *  To enable the output functionality, a learning process is required.
+ *  To perform learning, the learn button must be held down,
+ *  then the transmitter button should be pressed to send a signal.
+ *
+ *  Important note:
+ *  This code is intended for educational purposes only.
+ *  Therefore, priority has been given to displaying and decoding
+ *  the received data rather than maximizing reception speed or
+ *  execution performance.
+ *  As a result, the processing order and internal logic may differ
+ *  from the recommended operational sequence described in the
+ *  official documentation or datasheets.
+ *
+ *  Arduino UNO Pin out:
+ *  Pin 2 ------------------ <- [Radio PWM] --- [ASK 433.92MHZ or 315Mhz] ---- Antena!
+ *  Pin 3 ------------------ <- [Lern     ] --- [Button ]---------------------|GND
+ *  Pin 4 ------------------ -> [OUT 1   P] --- [330 Ohm]--- [LED] -----------|GND
+ *  Pin 5 ------------------ -> [OUT 2   P] --- [330 Ohm]--- [LED] -----------|GND
+ *  Pin 6 ------------------ -> [OUT 3   F] --- [330 Ohm]--- [LED] -----------|GND
+ *  Pin 7 ------------------ -> [OUT 4   F] --- [330 Ohm]--- [LED] -----------|GND
+ *
+ *  note: P:Pulse 1S , F:Flip output pin
  */
 
 #include <Arduino.h>
 #include <string.h>
 #include <stdio.h>
+#include <EEPROM.h>
 
 #include "radio.h"
 #include "keeloq.h"
 #include "hcs301.h"
 
 #define LED_PIN LED_BUILTIN
-
+#define BTN 3
 #define OUT_1 4
 #define OUT_2 5
 #define OUT_3 6
 #define OUT_4 7
+
+#define NORMAL_WINDOW 16
+#define RESYNC_WINDOW 2048
+
+struct Remote {
+  uint32_t serial;
+  uint16_t counter;
+};
+
+Remote remote;
 
 // some buffer for string formating in sprintf
 char Buffer[64];
@@ -38,7 +72,7 @@ uint16_t i = 0;
 
 // KEY for keeloq algoritm
 // must be same as transmiter key, 64bit LSB-first
-uint8_t key[] = {0x23,0x63,0x6c,0x21,0xbe,0x44,0xa7,0xbd};
+uint8_t key[] = { 0x23, 0x63, 0x6c, 0x21, 0xbe, 0x44, 0xa7, 0xbd };
 
 // some useful structher for bitfildes
 struct hcsFixed hcs_fix;
@@ -47,16 +81,85 @@ struct hcsEncrypted hcs_enc;
 // buffers for keeloq
 uint32_t temp;
 
+// Resync
+bool resyncActive = false;
+uint16_t firstResyncCounter = 0;
+
+void saveRemote() {
+  EEPROM.put(0, remote);
+}
+
+void loadRemote() {
+  EEPROM.get(0, remote);
+}
+
 // Setup - run once!
 void setup() {
   Serial.begin(9600);
+
   pinMode(LED_PIN, OUTPUT);
+  pinMode(BTN, INPUT_PULLUP);
   pinMode(OUT_1, OUTPUT);
   pinMode(OUT_2, OUTPUT);
   pinMode(OUT_3, OUTPUT);
   pinMode(OUT_4, OUTPUT);
+
   radio_init(&radio);
+
+  loadRemote();
+
   Serial.println("Ready");
+}
+
+void resetResync() {
+  resyncActive = false;
+  firstResyncCounter = 0;
+}
+
+// Handler for resynce Counter
+bool handleResync(uint16_t rxCounter) {
+  // Resync first packet
+  if (!resyncActive) {
+    Serial.println("Resync step 1 detected");
+    resyncActive = true;
+    firstResyncCounter = rxCounter;
+    return false;
+  }
+  // Resynce step two
+  int32_t delta = (int32_t)rxCounter - (int32_t)firstResyncCounter;
+  if (delta > 0 && delta <= NORMAL_WINDOW) {
+    Serial.println("Resync success → ACCEPT");
+
+    remote.counter = rxCounter;
+    saveRemote();
+    resetResync();
+    return true;
+  }
+  Serial.println("Resync failed");
+  resetResync();
+  return false;
+}
+
+// Check Counter Window
+bool checkCounter(uint16_t receivedCounter) {
+  int32_t delta = (int32_t)receivedCounter - (int32_t)remote.counter;
+  if (delta <= 0) {
+    Serial.println("Replay or old code → REJECT");
+    return false;
+  }
+  if (delta <= NORMAL_WINDOW) {
+    Serial.println("Valid code → ACCEPT");
+    remote.counter = receivedCounter;
+    saveRemote();
+    return true;
+  }
+  if (delta <= RESYNC_WINDOW) {
+    Serial.println("Resync required");
+    return handleResync(receivedCounter);
+  }
+  Serial.println("Counter too far → REJECT");
+  resetResync();
+  return false;
 }
 
 // jast toggel led
@@ -65,13 +168,20 @@ void led_toggle() {
 }
 
 // make output for control relay
-void gen_output(uint8_t btn)
-{
+void gen_output(uint8_t btn) {
   switch (btn) {
-    case 0x1 :digitalWrite(OUT_1,HIGH);delay(1000);digitalWrite(OUT_1,LOW);break;
-    case 0x2 :digitalWrite(OUT_2,HIGH);delay(1000);digitalWrite(OUT_2,LOW);break;
-    case 0x4 :digitalWrite(OUT_3, !digitalRead(OUT_3));break;
-    case 0x8 :digitalWrite(OUT_4, !digitalRead(OUT_4));break;
+    case 0x1:
+      digitalWrite(OUT_1, HIGH);
+      delay(1000);
+      digitalWrite(OUT_1, LOW);
+      break;
+    case 0x2:
+      digitalWrite(OUT_2, HIGH);
+      delay(1000);
+      digitalWrite(OUT_2, LOW);
+      break;
+    case 0x4: digitalWrite(OUT_3, !digitalRead(OUT_3)); break;
+    case 0x8: digitalWrite(OUT_4, !digitalRead(OUT_4)); break;
   }
 }
 
@@ -113,18 +223,24 @@ void loop() {
         sprintf(Buffer, "dec=%08lX : btn=%lX ovr=%lX disc=%lX C=%lX \r\n", temp, hcs_enc.btn, hcs_enc.ovr, hcs_enc.disc, hcs_enc.counter);
         Serial.print(Buffer);
 
-        // make output signal
-        if(hcs_enc.btn==hcs_fix.btn)
-        {
-          // WARNING!
-          // Future section: compare received counter with previous value in EEPROM
-          // and act if the counter is greater.
-          // For any valid Serial
-
-          // write on Pin
-          gen_output(hcs_enc.btn);
+        // Verify button
+        if (hcs_enc.btn == hcs_fix.btn) {
+          // Act for valid Serial
+          if (hcs_fix.ser == remote.serial) {
+            if (checkCounter(hcs_enc.counter)) {
+              // write on Pin
+              gen_output(hcs_enc.btn);
+            }
+          }
+          // Check lern button
+          else if (digitalRead(BTN) == LOW) {
+            remote.serial = hcs_fix.ser;
+            remote.counter = hcs_enc.counter;
+            saveRemote();
+            Serial.println("Device Lerned and data written to EEPROM successfully!");
+          }
         }
-        
+
       } else {
         // disc not match by 10bit of serial lsb
         Serial.print("WRONG KEY!\r\n");
