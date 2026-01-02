@@ -116,17 +116,24 @@ void resetResync() {
   firstResyncCounter = 0;
 }
 
+inline uint16_t counterDelta(uint16_t rx, uint16_t stored) {
+  return (uint16_t)(rx - stored);
+}
+
 // Handler for resynce Counter
 bool handleResync(uint16_t rxCounter) {
-  // Resync first packet
+
+  // Resync step 1
   if (!resyncActive) {
     Serial.println("Resync step 1 detected");
     resyncActive = true;
     firstResyncCounter = rxCounter;
     return false;
   }
-  // Resynce step two
-  int32_t delta = (int32_t)rxCounter - (int32_t)firstResyncCounter;
+
+  // Resync step 2
+  uint16_t delta = counterDelta(rxCounter, firstResyncCounter);
+
   if (delta > 0 && delta <= NORMAL_WINDOW) {
     Serial.println("Resync success → ACCEPT");
 
@@ -135,28 +142,35 @@ bool handleResync(uint16_t rxCounter) {
     resetResync();
     return true;
   }
+
   Serial.println("Resync failed");
   resetResync();
   return false;
 }
 
-// Check Counter Window
+// Check counter window
 bool checkCounter(uint16_t receivedCounter) {
-  int32_t delta = (int32_t)receivedCounter - (int32_t)remote.counter;
-  if (delta <= 0) {
-    Serial.println("Replay or old code → REJECT");
+
+  uint16_t delta = counterDelta(receivedCounter, remote.counter);
+
+  if (delta == 0) {
+    Serial.println("Same counter → REJECT");
     return false;
   }
+
   if (delta <= NORMAL_WINDOW) {
     Serial.println("Valid code → ACCEPT");
     remote.counter = receivedCounter;
     saveRemote();
+    resetResync();
     return true;
   }
+
   if (delta <= RESYNC_WINDOW) {
     Serial.println("Resync required");
     return handleResync(receivedCounter);
   }
+
   Serial.println("Counter too far → REJECT");
   resetResync();
   return false;
